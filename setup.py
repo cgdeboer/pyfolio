@@ -47,7 +47,7 @@ install_reqs = [
     'python-dateutil>=2.4.2',
     'pytz>=2014.10',
     'scipy>=0.14.0',
-    'seaborn>=0.6.0',
+    'seaborn>=0.7.0',
     'pandas-datareader>=0.2',
 ]
 
