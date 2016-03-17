@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 from setuptools import setup
-import sys
+
+import versioneer
 
 
 DISTNAME = 'pyfolio'
@@ -22,7 +23,7 @@ AUTHOR = 'Quantopian Inc'
 AUTHOR_EMAIL = 'opensource@quantopian.com'
 URL = "https://github.com/quantopian/pyfolio"
 LICENSE = "Apache License, Version 2.0"
-VERSION = "0.1"
+VERSION = "0.3.1"
 
 classifiers = ['Development Status :: 4 - Beta',
                'Programming Language :: Python',
@@ -45,10 +46,10 @@ install_reqs = [
     'pyparsing>=2.0.3',
     'python-dateutil>=2.4.2',
     'pytz>=2014.10',
-    'scikit-learn>=0.15.0',
     'scipy>=0.14.0',
     'seaborn>=0.6.0',
-    'statsmodels>=0.5.0']
+    'pandas-datareader>=0.2',
+]
 
 extras_reqs = {
     'bayesian': ['pymc3']
@@ -57,18 +58,21 @@ extras_reqs = {
 test_reqs = ['nose>=1.3.7', 'nose-parameterized>=0.5.0', 'runipy>=0.1.3']
 
 if __name__ == "__main__":
-    setup(name=DISTNAME,
-          version=VERSION,
-          maintainer=MAINTAINER,
-          maintainer_email=MAINTAINER_EMAIL,
-          description=DESCRIPTION,
-          license=LICENSE,
-          url=URL,
-          long_description=LONG_DESCRIPTION,
-          packages=['pyfolio', 'pyfolio.tests'],
-          package_data={'pyfolio': ['data/*.*']},
-          classifiers=classifiers,
-          install_requires=install_reqs,
-          extras_requires=extras_reqs,
-          tests_require=test_reqs,
-          test_suite='nose.collector')
+    setup(
+        name=DISTNAME,
+        cmdclass=versioneer.get_cmdclass(),
+        version=versioneer.get_version(),
+        maintainer=MAINTAINER,
+        maintainer_email=MAINTAINER_EMAIL,
+        description=DESCRIPTION,
+        license=LICENSE,
+        url=URL,
+        long_description=LONG_DESCRIPTION,
+        packages=['pyfolio', 'pyfolio.tests'],
+        package_data={'pyfolio': ['data/*.*']},
+        classifiers=classifiers,
+        install_requires=install_reqs,
+        extras_requires=extras_reqs,
+        tests_require=test_reqs,
+        test_suite='nose.collector',
+    )

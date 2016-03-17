@@ -2,6 +2,7 @@ from __future__ import division
 
 from unittest import TestCase
 from nose_parameterized import parameterized
+from numpy.testing import assert_allclose, assert_almost_equal
 
 import numpy as np
 import pandas as pd
@@ -40,8 +41,8 @@ class TestDrawdown(TestCase):
         # Need to use isnull because the result can be NaN, NaT, etc.
         self.assertTrue(
             pd.isnull(peak)) if expected_peak is None else self.assertEqual(
-            peak,
-            expected_peak)
+                peak,
+                expected_peak)
         self.assertTrue(
             pd.isnull(valley)) if expected_valley is None else \
             self.assertEqual(
@@ -235,21 +236,20 @@ class TestStats(TestCase):
         [10, -10, 10]) / 100.  # Ends in drawdown
     dt = pd.date_range('2000-1-3', periods=3, freq='D')
 
+    px_list_2 = [1.0, 1.2, 1.0, 0.8, 0.7, 0.8, 0.8, 0.8]
+    dt_2 = pd.date_range('2000-1-3', periods=8, freq='D')
+
     @parameterized.expand([
-        (simple_rets, 'calendar', utils.DAILY, 0.10584000000000014),
-        (simple_rets, 'compound', utils.DAILY, 0.16317653888658334),
-        (simple_rets, 'calendar', utils.DAILY, 0.10584000000000014),
-        (simple_rets, 'compound', utils.DAILY, 0.16317653888658334),
-        (simple_week_rets, 'compound', utils.WEEKLY, 0.031682168889005213),
-        (simple_week_rets, 'calendar', utils.WEEKLY, 0.021840000000000033),
-        (simple_month_rets, 'compound', utils.MONTHLY, 0.0072238075842128158),
-        (simple_month_rets, 'calendar', utils.MONTHLY, 0.0050400000000000071)
+        (simple_rets, utils.DAILY, 0.15500998835658075),
+        (simple_week_rets, utils.WEEKLY, 0.030183329386562319),
+        (simple_month_rets, utils.MONTHLY, 0.006885932704891129)
     ])
-    def test_annual_ret(self, returns, style, period, expected):
+    def test_annual_ret(self, returns, period, expected):
         self.assertEqual(
             timeseries.annual_return(
                 returns,
-                style=style, period=period),
+                period=period
+            ),
             expected)
 
     @parameterized.expand([
@@ -271,14 +271,14 @@ class TestStats(TestCase):
         )
 
     @parameterized.expand([
-        (simple_rets, 'calendar', 0.8624740045072119),
-        (simple_rets, 'compound', 1.3297007080039505)
+        (simple_rets, 1.2333396776895436),
+        (np.zeros(10), np.nan),
+        ([0.1, 0.2, 0.3], np.nan)
     ])
-    def test_sharpe(self, returns, returns_style, expected):
-        self.assertAlmostEqual(
+    def test_sharpe(self, returns, expected):
+        assert_almost_equal(
             timeseries.sharpe_ratio(
-                returns,
-                returns_style=returns_style),
+                returns),
             expected, DECIMAL_PLACES)
 
     @parameterized.expand([
@@ -289,7 +289,7 @@ class TestStats(TestCase):
             returns, rolling_sharpe_window).values.tolist()), expected)
 
     @parameterized.expand([
-        (simple_rets, 0.010766923838471554)
+        (simple_rets, 0.10376378866671222)
     ])
     def test_stability_of_timeseries(self, returns, expected):
         self.assertAlmostEqual(
@@ -308,16 +308,13 @@ class TestStats(TestCase):
             expected)
 
     @parameterized.expand([
-        (pd.Series(px_list,
-                   index=dt), 'calendar', -8.3999999999999559),
-        (pd.Series(px_list,
-                   index=dt), 'arithmetic', 84.000000000000014)
+        (pd.Series(px_list_2,
+                   index=dt_2).pct_change().dropna(), -2.3992211554712197)
     ])
-    def test_calmar(self, returns, returns_style, expected):
+    def test_calmar(self, returns, expected):
         self.assertEqual(
             timeseries.calmar_ratio(
-                returns,
-                returns_style=returns_style),
+                returns),
             expected)
 
     @parameterized.expand([
@@ -340,6 +337,18 @@ class TestStats(TestCase):
         self.assertAlmostEqual(
             timeseries.sortino_ratio(returns),
             expected, DECIMAL_PLACES)
+
+    def test_tail_ratio(self):
+        returns = np.random.randn(10000)
+        self.assertAlmostEqual(
+            timeseries.tail_ratio(returns),
+            1., 1)
+
+    def test_common_sense_ratio(self):
+        returns = pd.Series(np.random.randn(1000) + .1)
+        self.assertAlmostEqual(
+            timeseries.common_sense_ratio(returns),
+            0.024031933021535612, DECIMAL_PLACES)
 
 
 class TestMultifactor(TestCase):
@@ -367,3 +376,68 @@ class TestMultifactor(TestCase):
                 returns,
                 factors).values.tolist(),
             expected)
+
+
+class TestCone(TestCase):
+    def test_bootstrap_cone_against_linear_cone_normal_returns(self):
+        random_seed = 100
+        np.random.seed(random_seed)
+        days_forward = 200
+        cone_stdevs = (1., 1.5, 2.)
+        mu = .005
+        sigma = .002
+        rets = pd.Series(np.random.normal(mu, sigma, 10000))
+
+        midline = np.cumprod(1 + (rets.mean() * np.ones(days_forward)))
+        stdev = rets.std() * midline * np.sqrt(np.arange(days_forward)+1)
+
+        normal_cone = pd.DataFrame(columns=pd.Float64Index([]))
+        for s in cone_stdevs:
+            normal_cone[s] = midline + s * stdev
+            normal_cone[-s] = midline - s * stdev
+
+        bootstrap_cone = timeseries.forecast_cone_bootstrap(
+            rets, days_forward, cone_stdevs, starting_value=1,
+            random_seed=random_seed, num_samples=10000)
+
+        for col, vals in bootstrap_cone.iteritems():
+            expected = normal_cone[col].values
+            assert_allclose(vals.values, expected, rtol=.005)
+
+
+class TestBootstrap(TestCase):
+    @parameterized.expand([
+        (0., 1., 1000),
+        (1., 2., 500),
+        (-1., 0.1, 10),
+    ])
+    def test_calc_bootstrap(self, true_mean, true_sd, n):
+        """Compare bootstrap distribution of the mean to sampling distribution
+        of the mean.
+
+        """
+        np.random.seed(123)
+        func = np.mean
+        returns = pd.Series((np.random.randn(n) * true_sd) +
+                            true_mean)
+
+        samples = timeseries.calc_bootstrap(func, returns,
+                                            n_samples=10000)
+
+        # Calculate statistics of sampling distribution of the mean
+        mean_of_mean = np.mean(returns)
+        sd_of_mean = np.std(returns) / np.sqrt(n)
+
+        assert_almost_equal(
+            np.mean(samples),
+            mean_of_mean,
+            3,
+            'Mean of bootstrap does not match theoretical mean of'
+            'sampling distribution')
+
+        assert_almost_equal(
+            np.std(samples),
+            sd_of_mean,
+            3,
+            'SD of bootstrap does not match theoretical SD of'
+            'sampling distribution')

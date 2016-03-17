@@ -14,8 +14,6 @@
 # limitations under the License.
 from __future__ import division
 
-from collections import defaultdict
-
 import pandas as pd
 
 
@@ -39,7 +37,7 @@ def map_transaction(txn):
         symbol = txn['sid']['symbol']
     else:
         sid = txn['sid']
-        symbol = None
+        symbol = txn['sid']
 
     return {'sid': sid,
             'symbol': symbol,
@@ -98,7 +96,7 @@ def get_txn_vol(transactions):
         Daily transaction volume and number of shares.
          - See full explanation in tears.create_full_tear_sheet.
     """
-
+    transactions.index = transactions.index.normalize()
     amounts = transactions.amount.abs()
     prices = transactions.price
     values = amounts * prices
@@ -109,42 +107,69 @@ def get_txn_vol(transactions):
     return pd.concat([daily_values, daily_amounts], axis=1)
 
 
-def create_txn_profits(transactions):
-    """
-    Compute per-trade profits.
-
-    Generates a new transactions DataFrame with a profits column
+def adjust_returns_for_slippage(returns, turnover, slippage_bps):
+    """Apply a slippage penalty for every dollar traded.
 
     Parameters
     ----------
-    transactions : pd.DataFrame
-        Daily transaction volume and number of shares.
-         - See full explanation in tears.create_full_tear_sheet.
+    returns : pd.Series
+        Time series of daily returns.
+    turnover: pd.Series
+        Time series of daily total of buys and sells
+        divided by portfolio value.
+            - See txn.get_turnover.
+    slippage_bps: int/float
+        Basis points of slippage to apply.
 
     Returns
     -------
-    profits_dts : pd.DataFrame
-        DataFrame containing transactions and their profits, datetimes,
-        amounts, current prices, prior prices, and symbols.
+    pd.Series
+        Time series of daily returns, adjusted for slippage.
     """
+    slippage = 0.0001 * slippage_bps
+    # Only include returns in the period where the algo traded.
+    trim_returns = returns.loc[turnover.index]
+    return trim_returns - turnover * slippage
 
-    txn_descr = defaultdict(list)
 
-    for symbol, transactions_sym in transactions.groupby('symbol'):
-        transactions_sym = transactions_sym.reset_index()
+def get_turnover(positions, transactions, period=None, average=True):
+    """
+    Portfolio Turnover Rate:
 
-        for i, (amount, price, dt) in transactions_sym.iloc[1:][
-                ['amount', 'price', 'date_time_utc']].iterrows():
-            prev_amount, prev_price, prev_dt = transactions_sym.loc[
-                i - 1, ['amount', 'price', 'date_time_utc']]
-            profit = (price - prev_price) * -amount
-            txn_descr['profits'].append(profit)
-            txn_descr['dts'].append(dt - prev_dt)
-            txn_descr['amounts'].append(amount)
-            txn_descr['prices'].append(price)
-            txn_descr['prev_prices'].append(prev_price)
-            txn_descr['symbols'].append(symbol)
+    Value of purchases and sales divided
+    by the average portfolio value for the period.
 
-    profits_dts = pd.DataFrame(txn_descr)
+    If no period is provided the period is one time step.
 
-    return profits_dts
+    Parameters
+    ----------
+    positions : pd.DataFrame
+        Contains daily position values including cash
+        - See full explanation in tears.create_full_tear_sheet
+    transactions : pd.DataFrame
+        Prices and amounts of executed trades. One row per trade.
+        - See full explanation in tears.create_full_tear_sheet
+    period : str, optional
+        Takes the same arguments as df.resample.
+    average : bool
+        if True, return the average of purchases and sales divided
+        by portfolio value. If False, return the sum of
+        purchases and sales divided by portfolio value.
+
+    Returns
+    -------
+    turnover_rate : pd.Series
+        timeseries of portfolio turnover rates.
+    """
+    txn_vol = get_txn_vol(transactions)
+    traded_value = txn_vol.txn_volume
+    portfolio_value = positions.sum(axis=1)
+    if period is not None:
+        traded_value = traded_value.resample(period, how='sum')
+        portfolio_value = portfolio_value.resample(period, how='mean')
+    # traded_value contains the summed value from buys and sells;
+    # this is divided by 2.0 to get the average of the two.
+    turnover = traded_value / 2.0 if average else traded_value
+    turnover_rate = turnover.div(portfolio_value, axis='index')
+    turnover_rate = turnover_rate.fillna(0)
+    return turnover_rate

@@ -48,7 +48,7 @@ PERIODS['EZB IR Event'] = (
 
 # August 2007, March and September of 2008, Q1 & Q2 2009,
 PERIODS['Aug07'] = (pd.Timestamp('20070801'), pd.Timestamp('20070901'))
-PERIODS['Mar08'] = (pd.Timestamp('20080301'), pd.Timestamp('20070401'))
+PERIODS['Mar08'] = (pd.Timestamp('20080301'), pd.Timestamp('20080401'))
 PERIODS['Sept08'] = (pd.Timestamp('20080901'), pd.Timestamp('20081001'))
 PERIODS['2009Q1'] = (pd.Timestamp('20090101'), pd.Timestamp('20090301'))
 PERIODS['2009Q2'] = (pd.Timestamp('20090301'), pd.Timestamp('20090601'))
@@ -63,3 +63,16 @@ PERIODS['Oct14'] = (pd.Timestamp('20141001'), pd.Timestamp('20141101'))
 
 # Market down-turn in August/Sept 2015
 PERIODS['Fall2015'] = (pd.Timestamp('20150815'), pd.Timestamp('20150930'))
+
+# Market regimes
+PERIODS['Low Volatility Bull Market'] = (pd.Timestamp('20050101'),
+                                         pd.Timestamp('20070801'))
+
+PERIODS['GFC Crash'] = (pd.Timestamp('20070801'),
+                        pd.Timestamp('20090401'))
+
+PERIODS['Recovery'] = (pd.Timestamp('20090401'),
+                       pd.Timestamp('20130101'))
+
+PERIODS['New Normal'] = (pd.Timestamp('20130101'),
+                         pd.Timestamp('today'))

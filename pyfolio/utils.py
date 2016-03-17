@@ -14,30 +14,16 @@
 # limitations under the License.
 
 from __future__ import division
-from os.path import (
-    abspath,
-    dirname,
-    join,
-    isfile
-)
+from datetime import datetime
+import errno
+from os import makedirs, environ
+from os.path import expanduser, join, getmtime, isdir
 import warnings
 
-from datetime import datetime
-
 import pandas as pd
-import numpy as np
-import pandas.io.data as web
 from pandas.tseries.offsets import BDay
-
-import zipfile
-
-from io import BytesIO, StringIO
-
-try:
-    # For Python 3.0 and later
-    from urllib.request import urlopen
-except:
-    from urllib2 import urlopen
+from pandas_datareader import data as web
+import numpy as np
 
 from . import pos
 from . import txn
@@ -60,12 +46,32 @@ ANNUALIZATION_FACTORS = {
 }
 
 
-def pyfolio_root():
-    return dirname(abspath(__file__))
+def cache_dir(environ=environ):
+    try:
+        return environ['PYFOLIO_CACHE_DIR']
+    except KeyError:
+        return join(
+            environ.get(
+                'XDG_CACHE_HOME',
+                expanduser('~/.cache/'),
+            ),
+            'pyfolio',
+        )
 
 
 def data_path(name):
-    return join(pyfolio_root(), 'data', name)
+    return join(cache_dir(), name)
+
+
+def ensure_directory(path):
+    """
+    Ensure that a directory named "path" exists.
+    """
+    try:
+        makedirs(path)
+    except OSError as exc:
+        if exc.errno != errno.EEXIST or not isdir(path):
+            raise
 
 
 def one_dec_places(x, pos):
@@ -115,6 +121,13 @@ def get_utc_timestamp(dt):
     return dt
 
 
+_1_bday = BDay()
+
+
+def _1_bday_ago():
+    return pd.Timestamp.now().normalize() - _1_bday
+
+
 def get_returns_cached(filepath, update_func, latest_dt, **kwargs):
     """Get returns from a cached file if the cache is recent enough,
     otherwise, try to retrieve via a provided update function and
@@ -138,23 +151,40 @@ def get_returns_cached(filepath, update_func, latest_dt, **kwargs):
     """
     update_cache = False
 
-    if not isfile(filepath):
+    try:
+        mtime = getmtime(filepath)
+    except OSError as e:
+        if e.errno != errno.ENOENT:
+            raise
         update_cache = True
     else:
-        returns = pd.read_csv(filepath, index_col=0,
-                              parse_dates=True)
-        returns.index = returns.index.tz_localize("UTC")
-        if returns.index[-1] < latest_dt:
+        if pd.Timestamp(mtime, unit='s') < _1_bday_ago():
             update_cache = True
+        else:
+            returns = pd.read_csv(filepath, index_col=0, parse_dates=True)
+            returns.index = returns.index.tz_localize("UTC")
 
     if update_cache:
         returns = update_func(**kwargs)
         try:
+            ensure_directory(cache_dir())
+        except OSError as e:
+            warnings.warn(
+                'could not update cache: {}. {}: {}'.format(
+                    filepath, type(e).__name__, e,
+                ),
+                UserWarning,
+            )
+
+        try:
             returns.to_csv(filepath)
-        except IOError as e:
-            warnings.warn('Could not update cache {}.'
-                          'Exception: {}'.format(filepath, e),
-                          UserWarning)
+        except OSError as e:
+            warnings.warn(
+                'could not update cache {}. {}: {}'.format(
+                    filepath, type(e).__name__, e,
+                ),
+                UserWarning,
+            )
 
     return returns
 
@@ -210,7 +240,7 @@ def default_returns_func(symbol, start=None, end=None):
     if start is None:
         start = '1/1/1970'
     if end is None:
-        end = pd.Timestamp(datetime.today()).normalize() - BDay()
+        end = _1_bday_ago()
 
     start = get_utc_timestamp(start)
     end = get_utc_timestamp(end)
@@ -245,38 +275,21 @@ def vectorize(func):
 
 
 def get_fama_french():
-    """Retrieve Fama-French factors from dartmouth host.
+    """Retrieve Fama-French factors via pandas-datareader
 
     Returns
     -------
     pandas.DataFrame
         Percent change of Fama-French factors
     """
-    umd_req = urlopen('http://mba.tuck.dartmouth.edu/page'
-                      's/faculty/ken.french/ftp/F-F_Momentum'
-                      '_Factor_daily_CSV.zip')
-    factors_req = urlopen('http://mba.tuck.dartmouth.edu/pag'
-                          'es/faculty/ken.french/ftp/F-F_Re'
-                          'search_Data_Factors_daily_CSV.zip')
-
-    umd_zip = zipfile.ZipFile(BytesIO(umd_req.read()), 'r')
-    factors_zip = zipfile.ZipFile(BytesIO(factors_req.read()),
-                                  'r')
-    umd_csv = umd_zip.read('F-F_Momentum_Factor_daily.CSV')
-    umd_csv = umd_csv.decode('utf-8')
-    umd_csv = umd_csv.split('\r\n\r\n')[2]\
-                     .replace('\r\n', '\n')
-    factors_csv = factors_zip.read('F-F_Research_Data_'
-                                   'Factors_daily.CSV')
-    factors_csv = factors_csv.decode('utf-8')
-    factors_csv = factors_csv.split('\r\n\r\n')[1]\
-                             .replace('\r\n', '\n')
-
-    factors = pd.DataFrame.from_csv(StringIO(factors_csv), sep=',')
-    umd = pd.DataFrame.from_csv(StringIO(umd_csv), sep=',')
-
-    five_factors = factors.join(umd).dropna(axis=0)
-    five_factors = five_factors / 100
+    start = '1/1/1970'
+    research_factors = web.DataReader('F-F_Research_Data_Factors_daily',
+                                      'famafrench', start=start)[0]
+    momentum_factor = web.DataReader('F-F_Momentum_Factor_daily',
+                                     'famafrench', start=start)[0]
+    five_factors = research_factors.join(momentum_factor).dropna()
+    five_factors /= 100.
+    five_factors.index = five_factors.index.tz_localize('utc')
 
     return five_factors
 
@@ -296,7 +309,7 @@ def load_portfolio_risk_factors(filepath_prefix=None, start=None, end=None):
     if start is None:
         start = '1/1/1970'
     if end is None:
-        end = pd.Timestamp(datetime.today()).normalize() - BDay()
+        end = _1_bday_ago()
 
     start = get_utc_timestamp(start)
     end = get_utc_timestamp(end)
@@ -309,6 +322,38 @@ def load_portfolio_risk_factors(filepath_prefix=None, start=None, end=None):
     five_factors = get_returns_cached(filepath, get_fama_french, end)
 
     return five_factors.loc[start:end]
+
+
+def get_treasury_yield(start=None, end=None, period='3MO'):
+    """Load treasury yields from FRED.
+
+    Parameters
+    ----------
+    start : date, optional
+        Earliest date to fetch data for.
+        Defaults to earliest date available.
+    end : date, optional
+        Latest date to fetch data for.
+        Defaults to latest date available.
+    period : {'1MO', '3MO', '6MO', 1', '5', '10'}, optional
+        Which maturity to use.
+
+    Returns
+    -------
+    pd.Series
+        Annual treasury yield for every day.
+    """
+    if start is None:
+        start = '1/1/1970'
+    if end is None:
+        end = _1_bday_ago()
+
+    treasury = web.DataReader("DGS3{}".format(period), "fred",
+                              start, end)
+
+    treasury = treasury.ffill()
+
+    return treasury
 
 
 def extract_rets_pos_txn_from_zipline(backtest):
@@ -333,7 +378,7 @@ def extract_rets_pos_txn_from_zipline(backtest):
         Daily net position values.
          - See full explanation in tears.create_full_tear_sheet.
     transactions : pd.DataFrame
-        Daily transaction volume and dollar ammount.
+        Prices and amounts of executed trades. One row per trade.
          - See full explanation in tears.create_full_tear_sheet.
     gross_lev : pd.Series, optional
         The leverage of a strategy.
@@ -364,9 +409,9 @@ def extract_rets_pos_txn_from_zipline(backtest):
         raise ValueError("The backtest does not have any positions.")
     positions = pd.concat(raw_positions)
     positions = pos.extract_pos(positions, backtest.ending_cash)
-    transactions_frame = txn.make_transaction_frame(backtest.transactions)
-    transactions = txn.get_txn_vol(transactions_frame)
-    transactions.index = transactions.index.normalize()
+    transactions = txn.make_transaction_frame(backtest.transactions)
+    if transactions.index.tzinfo is None:
+        transactions.index = transactions.index.tz_localize('utc')
 
     return returns, positions, transactions, gross_lev
 

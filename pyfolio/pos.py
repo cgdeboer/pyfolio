@@ -15,24 +15,26 @@
 from __future__ import division
 
 import pandas as pd
+import numpy as np
+import warnings
 
 
-def get_portfolio_alloc(positions):
+def get_percent_alloc(values):
     """
     Determines a portfolio's allocations.
 
     Parameters
     ----------
-    positions : pd.DataFrame
+    values : pd.DataFrame
         Contains position values or amounts.
 
     Returns
     -------
-    positions_alloc : pd.DataFrame
+    allocations : pd.DataFrame
         Positions and their allocations.
     """
-    return positions.divide(
-        positions.abs().sum(axis='columns'),
+    return values.divide(
+        values.sum(axis='columns'),
         axis='rows'
     )
 
@@ -61,7 +63,7 @@ def get_long_short_pos(positions):
     df_long_short = pd.DataFrame({'long': longs,
                                   'short': shorts})
 
-    return df_long_short / net_liquidation
+    return df_long_short.divide(net_liquidation, axis='index')
 
 
 def get_top_long_short_abs(positions, top=10):
@@ -93,6 +95,37 @@ def get_top_long_short_abs(positions, top=10):
     df_top_short = df_min[df_min < 0].nsmallest(top)
     df_top_abs = df_abs_max.nlargest(top)
     return df_top_long, df_top_short, df_top_abs
+
+
+def get_max_median_position_concentration(positions):
+    """
+    Finds the max and median long and short position concentrations
+    in each time period specified by the index of positions.
+
+    Parameters
+    ----------
+    positions : pd.DataFrame
+        The positions that the strategy takes over time.
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns are max long, max short, median long, and median short
+        position concentrations. Rows are timeperiods.
+    """
+    expos = get_percent_alloc(positions)
+    expos = expos.drop('cash', axis=1)
+
+    longs = expos.where(expos.applymap(lambda x: x > 0))
+    shorts = expos.where(expos.applymap(lambda x: x < 0))
+
+    alloc_summary = pd.DataFrame()
+    alloc_summary['max_long'] = longs.max(axis=1)
+    alloc_summary['median_long'] = longs.median(axis=1)
+    alloc_summary['median_short'] = shorts.median(axis=1)
+    alloc_summary['max_short'] = shorts.min(axis=1)
+
+    return alloc_summary
 
 
 def extract_pos(positions, cash):
@@ -127,39 +160,49 @@ def extract_pos(positions, cash):
     return values
 
 
-def get_turnover(transactions, positions, period=None):
+def get_sector_exposures(positions, symbol_sector_map):
     """
-    Portfolio Turnover Rate:
-
-    Average value of purchases and sales divided
-    by the average portfolio value for the period.
-
-    If no period is provided the period is one time step.
-
+    Sum position exposures by sector.
     Parameters
     ----------
-    transactions_df : pd.DataFrame
-        Contains transactions data.
-        - See full explanation in tears.create_full_tear_sheet
     positions : pd.DataFrame
-        Contains daily position values including cash
-        - See full explanation in tears.create_full_tear_sheet
-    period : str, optional
-        Takes the same arguments as df.resample.
-
+        Contains position values or amounts.
+        - Example
+            index         'AAPL'         'MSFT'        'CHK'        cash
+            2004-01-09    13939.380     -15012.993    -403.870      1477.483
+            2004-01-12    14492.630     -18624.870    142.630       3989.610
+            2004-01-13    -13853.280    13653.640     -100.980      100.000
+    symbol_sector_map : dict or pd.Series
+        Security identifier to sector mapping.
+        Security ids as keys/index, sectors as values.
+        - Example:
+            {'AAPL' : 'Technology'
+             'MSFT' : 'Technology'
+             'CHK' : 'Natural Resources'}
     Returns
     -------
-    turnover_rate : pd.Series
-        timeseries of portfolio turnover rates.
+    sector_exp : pd.DataFrame
+        Sectors and their allocations.
+        - Example:
+            index         'Technology'    'Natural Resources' cash
+            2004-01-09    -1073.613       -403.870            1477.4830
+            2004-01-12    -4132.240       142.630             3989.6100
+            2004-01-13    -199.640        -100.980            100.0000
     """
+    cash = positions['cash']
+    positions = positions.drop('cash', axis=1)
 
-    traded_value = transactions.txn_volume
-    portfolio_value = positions.sum(axis=1)
-    if period is not None:
-        traded_value = traded_value.resample(period, how='sum')
-        portfolio_value = portfolio_value.resample(period, how='mean')
-    # traded_value contains the summed value from buys and sells;
-    # this is divided by 2.0 to get the average of the two.
-    turnover = traded_value / 2.0
-    turnover_rate = turnover / portfolio_value
-    return turnover_rate
+    unmapped_pos = np.setdiff1d(positions.columns.values,
+                                list(symbol_sector_map.keys()))
+    if len(unmapped_pos) > 0:
+        warn_message = """Warning: Symbols {} have no sector mapping.
+        They will not be included in sector allocations""".format(
+            ", ".join(map(str, unmapped_pos)))
+        warnings.warn(warn_message, UserWarning)
+
+    sector_exp = positions.groupby(
+        by=symbol_sector_map, axis=1).sum()
+
+    sector_exp['cash'] = cash
+
+    return sector_exp
